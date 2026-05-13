@@ -13,13 +13,14 @@ class CameraWorker(QObject):
     finished = pyqtSignal()
     
     
-    def __init__(self, source, num_attempts=5, queue=None):
+    def __init__(self, source, num_attempts=5, queue=None, max_queue_size=1000):
         super().__init__()
         self.source = source
         self.running = False
         self.num_attempts = num_attempts
         self.attempts = 0
         self.queue = queue
+        self.queue.maxsize = max_queue_size
     def run(self):
         while self.running:
             cap = cv2.VideoCapture(self.source)
@@ -39,7 +40,7 @@ class CameraWorker(QObject):
                 ret, frame = cap.read()
                 frame = cv2.flip(frame, 1)
                 self.queue.put(frame)
-                if self.queue.qsize() > 1:
+                if self.queue.qsize() > self.queue.maxsize:
                     self.queue.get()
                 if not ret:
                     print("Stream ended or error occurred")
