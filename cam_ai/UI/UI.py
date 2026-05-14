@@ -1,7 +1,7 @@
 import sys
 import time
 import cv2
-from ThreadCamera import CameraWorker
+from cam_ai.threads.ThreadCamera import CameraWorker
 from PyQt5.QtCore import QThread, pyqtSignal, QObject
 from PyQt5.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 from PyQt5.QtGui import QPixmap, QImage
