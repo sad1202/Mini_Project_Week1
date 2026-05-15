@@ -1,14 +1,22 @@
-import onnx
-from onnxruntime.quantization import quantize_dynamic, QuantType
+from pathlib import Path
+from ultralytics import YOLO
 
-model_input = "yolo26n_int8.onnx"
-model_output = "yolo26n_int4.onnx"
+MODEL_PATH = "yolo26n.pt"
+OUTPUT_DIR = "openvino"
+model = YOLO(MODEL_PATH)
 
-# Tiến hành lượng tử hóa
-quantize_dynamic(
-    model_input=model_input,
-    model_output=model_output,
-    weight_type=QuantType.QFLOAT8E4M3FN
+model.export(
+    format="openvino",
+    int8=False,
+    imgsz=320,
+    dynamic=False,
+    half=True,
+    batch=4,
+    data="coco8.yaml"
 )
 
-print(f"✅ Đã convert thành công sang: {model_output}")
+
+
+export_path = Path(MODEL_PATH).stem + "_openvino_model"
+
+print(f"{export_path}")
