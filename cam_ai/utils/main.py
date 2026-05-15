@@ -74,6 +74,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--loiter-seconds", type=float, default=5.0)
     parser.add_argument("--crowd-threshold", type=int, default=3)
+    parser.add_argument("--imgsz", type=int, default=320, help="Image size for YOLO model inference.")
     return parser.parse_args()
 
 
@@ -100,6 +101,7 @@ def main() -> int:
         mode=args.mode,
         loiter_seconds=args.loiter_seconds,
         crowd_threshold=args.crowd_threshold,
+        imgsz=args.imgsz,
     )
     window.show()
     return app.exec_()

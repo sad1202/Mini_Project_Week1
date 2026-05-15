@@ -7,6 +7,4 @@ model.export(
     format="onnx",
     batch=4,
     imgsz=320,
-    opset=17,
-    # half=True
 )

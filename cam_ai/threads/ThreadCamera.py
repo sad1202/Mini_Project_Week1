@@ -11,10 +11,9 @@ from cam_ai.threads.pipeline_data import FramePacket, put_latest
 
 
 class CaptureThread(QThread):
-    """Read frames from webcam/video/RTSP and publish them to a queue."""
-
-    status_changed = pyqtSignal(str, str)
+   
     fps_updated = pyqtSignal(float)
+    source_fps_ready = pyqtSignal(float)
 
     def __init__(
         self,
@@ -74,23 +73,24 @@ class CaptureThread(QThread):
 
             if not cap.isOpened():
                 reconnect_attempts += 1
-                self.status_changed.emit("Capture", f"Disconnected, reconnect {reconnect_attempts}")
                 if self.max_reconnect_attempts and reconnect_attempts >= self.max_reconnect_attempts:
-                    self.status_changed.emit("Capture", "Stopped: cannot connect")
                     break
                 time.sleep(self.reconnect_delay)
                 continue
 
             reconnect_attempts = 0
             frame_interval = self._frame_interval(cap, self.source)
+            if frame_interval is not None:
+                self.source_fps_ready.emit(1.0 / frame_interval)
+            else:
+                self.source_fps_ready.emit(0.0)
+
             self._fps_history.clear()
-            self.status_changed.emit("Capture", "Running")
             last_frame_time = time.perf_counter()
 
             while self.running and cap.isOpened():
                 ok, frame = cap.read()
                 if not ok or frame is None:
-                    self.status_changed.emit("Capture", "Lost connection, reconnecting")
                     break
 
                 if self.frame_size:
@@ -103,10 +103,7 @@ class CaptureThread(QThread):
                     now = time.perf_counter()
                 delta = now - last_frame_time
                 last_frame_time = now
-                if frame_interval is not None:
-                    fps = 1.0 / frame_interval
-                else:
-                    fps = self._smooth_fps(1.0 / delta if delta > 0 else 0.0)
+                fps = self._smooth_fps(1.0 / delta if delta > 0 else 0.0)
 
                 frame_id += 1
                 packet = FramePacket(
@@ -124,7 +121,6 @@ class CaptureThread(QThread):
             if self.running:
                 time.sleep(self.reconnect_delay)
 
-        self.status_changed.emit("Capture", "Stopped")
 
     def _smooth_fps(self, fps: float) -> float:
         self._fps_history.append(fps)
@@ -137,5 +133,5 @@ class CaptureThread(QThread):
         self.wait(1500)
 
 
-# Backward-compatible name for older tests/imports.
+
 CameraWorker = CaptureThread

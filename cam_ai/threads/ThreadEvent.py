@@ -8,9 +8,8 @@ from cam_ai.threads.pipeline_data import DisplayPacket, Event, TrackingPacket, T
 
 
 class EventThread(QThread):
-    """Detect ROI loitering/crowding events and annotate the display frame."""
+    
 
-    status_changed = pyqtSignal(str, str)
     event_ready = pyqtSignal(object)
     metrics_ready = pyqtSignal(object)
 
@@ -35,7 +34,6 @@ class EventThread(QThread):
         self._last_event_at: dict[tuple[str, str, int | None], float] = {}
 
     def run(self) -> None:
-        self.status_changed.emit("Event", "Running")
         while self.running:
             try:
                 packet: TrackingPacket = self.input_queue.get(timeout=0.2)
@@ -71,7 +69,6 @@ class EventThread(QThread):
             for event in events:
                 self.event_ready.emit(event)
 
-        self.status_changed.emit("Event", "Stopped")
 
     def _detect_events(
         self,

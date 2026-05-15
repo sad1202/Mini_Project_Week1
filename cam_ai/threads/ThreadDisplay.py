@@ -10,7 +10,6 @@ class DisplayThread(QThread):
 
     frame_ready = pyqtSignal(object)
     metrics_ready = pyqtSignal(object)
-    status_changed = pyqtSignal(str, str)
 
     def __init__(self, input_queue: Queue):
         super().__init__()
@@ -20,7 +19,6 @@ class DisplayThread(QThread):
         self._last_time = time.perf_counter()
 
     def run(self) -> None:
-        self.status_changed.emit("Display", "Running")
         while self.running:
             try:
                 packet: DisplayPacket = self.input_queue.get(timeout=0.2)
@@ -31,11 +29,13 @@ class DisplayThread(QThread):
             delta = now - self._last_time
             self._last_time = now
             packet.display_fps = self._smooth_fps(1.0 / delta if delta > 0 else 0.0)
+            packet.latency_ms = max(0.0, (time.time() - packet.timestamp) * 1000.0)
 
             self.frame_ready.emit(packet)
             self.metrics_ready.emit(
                 {
                     "display_fps": packet.display_fps,
+                    "latency_ms": packet.latency_ms,
                     "capture_fps": packet.capture_fps,
                     "process_fps": packet.process_fps,
                     "tracking_fps": packet.tracking_fps,
@@ -45,7 +45,6 @@ class DisplayThread(QThread):
                 }
             )
 
-        self.status_changed.emit("Display", "Stopped")
 
     def _smooth_fps(self, fps: float) -> float:
         self._fps_history.append(fps)

@@ -34,46 +34,6 @@ from cam_ai.threads.ThreadTracking import BatchTrackingThread, TrackingThread
 from cam_ai.threads.pipeline_data import DisplayPacket, Event
 
 
-APP_STYLESHEET = """
-QWidget {
-    background: #101214;
-    color: #f4f4f4;
-    font-family: Segoe UI, Arial;
-    font-size: 12px;
-}
-QLabel#TitleLabel {
-    font-size: 18px;
-    font-weight: 600;
-}
-QLabel#VideoLabel {
-    background: #050607;
-    border: 1px solid #2f343a;
-}
-QLabel#CameraTitle {
-    font-size: 14px;
-    font-weight: 600;
-}
-QWidget#CameraPanel {
-    border: 1px solid #2f343a;
-    border-radius: 6px;
-}
-QPushButton, QComboBox {
-    background: #1d2228;
-    border: 1px solid #3a424c;
-    border-radius: 4px;
-    padding: 5px 8px;
-}
-QPushButton:hover, QComboBox:hover {
-    border-color: #4f9cff;
-}
-QListWidget {
-    background: #0b0d0f;
-    border: 1px solid #2f343a;
-    border-radius: 4px;
-}
-"""
-
-
 class CameraPanel(QWidget):
     def __init__(
         self,
@@ -85,6 +45,7 @@ class CameraPanel(QWidget):
         roi: tuple[float, float, float, float] = (0.25, 0.2, 0.75, 0.9),
         loiter_seconds: float = 5.0,
         crowd_threshold: int = 3,
+        imgsz: int = 320,
         build_process_thread: bool = True,
         build_tracking_thread: bool = True,
         process_mode_changed=None,
@@ -100,25 +61,17 @@ class CameraPanel(QWidget):
         self.roi = roi
         self.loiter_seconds = loiter_seconds
         self.crowd_threshold = crowd_threshold
+        self.imgsz = imgsz
         self.build_process_thread = build_process_thread
         self.build_tracking_thread = build_tracking_thread
         self.process_mode_changed = process_mode_changed
         self.metric_values = {
+            "source_fps": "--",
             "capture_fps": "--",
             "process_fps": "--",
             "tracking_fps": "--",
             "display_fps": "--",
-            "people_count": "--",
-            "track_count": "--",
-            "processing_mode": mode,
-            "detector": "--",
-        }
-        self.status_values = {
-            "Capture": "Idle",
-            "Process": "Idle",
-            "Tracking": "Idle",
-            "Event": "Idle",
-            "Display": "Idle",
+            "latency_ms": "--",
         }
 
         self._build_ui()
@@ -126,14 +79,12 @@ class CameraPanel(QWidget):
         self._connect_pipeline()
 
     def _build_ui(self) -> None:
-        self.setObjectName("CameraPanel")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
 
         header = QHBoxLayout()
         self.title_label = QLabel(f"Camera {self.index + 1}")
-        self.title_label.setObjectName("CameraTitle")
         self.mode_combo = QComboBox()
         self.mode_combo.addItem("None", "none")
         self.mode_combo.addItem("Gray", "grayscale")
@@ -144,7 +95,6 @@ class CameraPanel(QWidget):
         layout.addLayout(header)
 
         self.video_label = QLabel("Waiting for frame")
-        self.video_label.setObjectName("VideoLabel")
         self.video_label.setAlignment(Qt.AlignCenter)
         self.video_label.setMinimumSize(420, 236)
         self.video_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -154,16 +104,11 @@ class CameraPanel(QWidget):
         self.metrics_label.setWordWrap(True)
         layout.addWidget(self.metrics_label)
 
-        self.status_label = QLabel()
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
-
         self.event_list = QListWidget()
         self.event_list.setMaximumHeight(76)
         layout.addWidget(self.event_list)
 
         self._render_metrics()
-        self._render_status()
 
     def _build_pipeline(self) -> None:
         self.capture_queue = Queue(maxsize=2)
@@ -186,6 +131,7 @@ class CameraPanel(QWidget):
                 model_format=self.model_format,
                 mode=self.mode_combo.currentData(),
                 roi=self.roi,
+                imgsz=self.imgsz,
             )
         self.tracking_thread = None
         if self.build_tracking_thread:
@@ -210,9 +156,7 @@ class CameraPanel(QWidget):
             self.worker_threads.insert(insert_at, self.tracking_thread)
 
     def _connect_pipeline(self) -> None:
-        for thread in self.worker_threads:
-            thread.status_changed.connect(self.update_status)
-
+        self.capture_thread.source_fps_ready.connect(lambda fps: self.update_metrics({"source_fps": fps}))
         self.capture_thread.fps_updated.connect(lambda fps: self.update_metrics({"capture_fps": fps}))
         if self.process_thread is not None:
             self.process_thread.metrics_ready.connect(self.update_metrics)
@@ -263,10 +207,6 @@ class CameraPanel(QWidget):
                 self.metric_values[key] = str(value)
         self._render_metrics()
 
-    def update_status(self, name: str, status: str) -> None:
-        self.status_values[name] = status
-        self._render_status()
-
     def add_event(self, event: Event) -> None:
         self.event_list.insertItem(0, f"[{event.level.upper()}] {event.message}")
         while self.event_list.count() > 8:
@@ -276,27 +216,12 @@ class CameraPanel(QWidget):
         self.metrics_label.setText(
             " | ".join(
                 [
+                    f"Source FPS: {self.metric_values['source_fps']}",
                     f"Cam FPS: {self.metric_values['capture_fps']}",
                     f"Process: {self.metric_values['process_fps']}",
                     f"Track: {self.metric_values['tracking_fps']}",
                     f"Display: {self.metric_values['display_fps']}",
-                    f"People: {self.metric_values['people_count']}",
-                    f"IDs: {self.metric_values['track_count']}",
-                    f"Mode: {self.metric_values['processing_mode']}",
-                    f"Model: {self.metric_values['detector']}",
-                ]
-            )
-        )
-
-    def _render_status(self) -> None:
-        self.status_label.setText(
-            " | ".join(
-                [
-                    f"C: {self.status_values['Capture']}",
-                    f"P: {self.status_values['Process']}",
-                    f"T: {self.status_values['Tracking']}",
-                    f"E: {self.status_values['Event']}",
-                    f"D: {self.status_values['Display']}",
+                    f"Latency: {self.metric_values['latency_ms']} ms",
                 ]
             )
         )
@@ -313,11 +238,11 @@ class MonitoringWindow(QWidget):
         roi: tuple[float, float, float, float] = (0.25, 0.2, 0.75, 0.9),
         loiter_seconds: float = 5.0,
         crowd_threshold: int = 3,
+        imgsz: int = 320,
     ):
         super().__init__()
         self.setWindowTitle("AI Camera Monitoring - QThread Queue Demo")
         self.resize(1280, 820)
-        self.setStyleSheet(APP_STYLESHEET)
 
         if sources is None:
             sources = [source if source is not None else self._default_source()]
@@ -333,7 +258,6 @@ class MonitoringWindow(QWidget):
 
         header = QHBoxLayout()
         title = QLabel(f"AI Camera Monitoring ({len(self.sources)} camera)")
-        title.setObjectName("TitleLabel")
         self.start_button = QPushButton("Start All")
         self.stop_button = QPushButton("Stop All")
         header.addWidget(title, stretch=1)
@@ -355,6 +279,7 @@ class MonitoringWindow(QWidget):
                 roi=roi,
                 loiter_seconds=loiter_seconds,
                 crowd_threshold=crowd_threshold,
+                imgsz=imgsz,
                 build_process_thread=len(self.sources) == 1,
                 build_tracking_thread=len(self.sources) == 1,
                 process_mode_changed=self.set_shared_process_mode,
@@ -375,15 +300,14 @@ class MonitoringWindow(QWidget):
                 model_format=model_format,
                 mode=mode,
                 roi=roi,
+                imgsz=imgsz,
             )
-            self.shared_process_thread.status_changed.connect(self.update_shared_process_status)
             self.shared_process_thread.metrics_ready.connect(self.update_shared_process_metrics)
             tracking_streams = [
                 (panel.camera_id, panel.process_queue, panel.tracking_queue)
                 for panel in self.panels
             ]
             self.shared_tracking_thread = BatchTrackingThread(tracking_streams)
-            self.shared_tracking_thread.status_changed.connect(self.update_shared_tracking_status)
             self.shared_tracking_thread.metrics_ready.connect(self.update_shared_tracking_metrics)
 
         self.start_button.clicked.connect(self.start_pipeline)
@@ -419,10 +343,6 @@ class MonitoringWindow(QWidget):
                 panel.metric_values["processing_mode"] = mode
                 panel._render_metrics()
 
-    def update_shared_process_status(self, name: str, status: str) -> None:
-        for panel in self.panels:
-            panel.update_status(name, status)
-
     def update_shared_process_metrics(self, metrics: dict) -> None:
         camera_id = metrics.get("camera_id")
         panel = self.panels_by_camera_id.get(camera_id)
@@ -430,10 +350,6 @@ class MonitoringWindow(QWidget):
             return
         filtered_metrics = {key: value for key, value in metrics.items() if key != "camera_id"}
         panel.update_metrics(filtered_metrics)
-
-    def update_shared_tracking_status(self, name: str, status: str) -> None:
-        for panel in self.panels:
-            panel.update_status(name, status)
 
     def update_shared_tracking_metrics(self, metrics: dict) -> None:
         camera_id = metrics.get("camera_id")

@@ -85,6 +85,7 @@ class DisplayPacket:
     process_fps: float
     tracking_fps: float
     display_fps: float = 0.0
+    latency_ms: float = 0.0
     people_count: int = 0
     track_count: int = 0
     events: List[Event] = field(default_factory=list)
@@ -92,7 +93,7 @@ class DisplayPacket:
 
 
 def put_latest(queue: Queue, item) -> None:
-    """Put an item into a bounded queue, dropping stale items first."""
+
     while queue.full():
         try:
             queue.get_nowait()
