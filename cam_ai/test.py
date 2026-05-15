@@ -1,21 +1,24 @@
-import torch
-import numpy as np
-import time
-from ultralytics import YOLO
+import sys
+from pathlib import Path
 
-model = YOLO("yolov8n.pt")
-model.overrides["verbose"] = False
+try:
+    import onnxruntime as _onnxruntime  # noqa: F401
+except Exception:
+    _onnxruntime = None
 
-for bs in [1, 2, 4, 8, 16]:
-    dummy = torch.rand(bs, 3, 320, 320)
+from PyQt5.QtWidgets import QApplication
 
-    # warmup
-    for _ in range(3):
-        model.predictor = None
-        _ = model.model(dummy)
 
-    t = time.perf_counter()
-    for _ in range(20):
-        model.model(dummy)
-    ms = (time.perf_counter() - t) / 20 * 1000
-    print(f"batch={bs}: {ms:.1f}ms total | {ms/bs:.1f}ms per frame")
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from cam_ai.UI.UI import MonitoringWindow  # noqa: E402
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    sample_source = MonitoringWindow._default_source()
+    window = MonitoringWindow(sources=[sample_source, sample_source, sample_source, sample_source])
+    window.show()
+    raise SystemExit(app.exec_())

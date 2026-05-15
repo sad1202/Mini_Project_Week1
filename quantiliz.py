@@ -1,14 +1,9 @@
-import onnx
-from onnxruntime.quantization import quantize_dynamic, QuantType
+from ultralytics import YOLO
 
-model_input = "yolo26n_int8.onnx"
-model_output = "yolo26n_int4.onnx"
+model = YOLO("yolo26n.pt")
 
-# Tiến hành lượng tử hóa
-quantize_dynamic(
-    model_input=model_input,
-    model_output=model_output,
-    weight_type=QuantType.QFLOAT8E4M3FN
+model.export(
+    format="openvino",
+    int8=True,
+    imgsz=320
 )
-
-print(f"✅ Đã convert thành công sang: {model_output}")
