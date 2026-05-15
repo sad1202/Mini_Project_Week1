@@ -1,120 +1,137 @@
-import sys
+import os
 import time
-import cv2
-from PyQt5.QtCore import QThread, pyqtSignal, QObject
-from PyQt5.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
-from PyQt5.QtGui import QPixmap, QImage
+from pathlib import Path
 from queue import Queue
+from typing import Any
+
+import cv2
+from PyQt5.QtCore import QThread, pyqtSignal
+
+from cam_ai.threads.pipeline_data import FramePacket, put_latest
 
 
-class CameraWorker(QObject):
-    frame_ready = pyqtSignal(object)
-    smooth_fps_update = pyqtSignal(float)
-    disconnected = pyqtSignal()
-    connect = pyqtSignal()
-    finished = pyqtSignal()
+class CaptureThread(QThread):
+   
+    fps_updated = pyqtSignal(float)
+    source_fps_ready = pyqtSignal(float)
 
-    def __init__(self, source=0, num_attempts=5, queue=None, max_queue_size=4):
+    def __init__(
+        self,
+        source: Any,
+        output_queue: Queue,
+        camera_id: str = "camera-1",
+        frame_size: tuple[int, int] | None = (640, 360),
+        reconnect_delay: float = 2.0,
+        max_reconnect_attempts: int = 0,
+    ):
         super().__init__()
-        self.source = source
+        self.source = self._normalize_source(source)
+        self.output_queue = output_queue
+        self.camera_id = camera_id
+        self.frame_size = frame_size
+        self.reconnect_delay = reconnect_delay
+        self.max_reconnect_attempts = max_reconnect_attempts
         self.running = True
-        self.num_attempts = num_attempts
-        self.attempts = 0
-        self.queue = queue
-        self.queue.maxsize = max_queue_size
-        self.queue_fps_history = []
+        self._fps_history: list[float] = []
 
-    def run(self):
+        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
+
+    @staticmethod
+    def _normalize_source(source: Any) -> Any:
+        if isinstance(source, str) and source.isdigit():
+            return int(source)
+        return source
+
+    @staticmethod
+    def _is_file_source(source: Any) -> bool:
+        if not isinstance(source, str):
+            return False
+        lowered = source.lower()
+        if lowered.startswith(("rtsp://", "rtmp://", "http://", "https://")):
+            return False
+        return Path(source).exists()
+
+    @staticmethod
+    def _frame_interval(cap: cv2.VideoCapture, source: Any) -> float | None:
+        if not CaptureThread._is_file_source(source):
+            return None
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0 or fps > 240:
+            return None
+        return 1.0 / fps
+
+    def run(self) -> None:
+        frame_id = 0
+        reconnect_attempts = 0
+
         while self.running:
-            cap = cv2.VideoCapture(self.source)
-            print(
-                f"Attempting to connect to {self.source} (Attempt {self.attempts + 1}/{self.num_attempts})"
-            )
-            cnt_frame = 0
+            if isinstance(self.source, int):
+                cap = cv2.VideoCapture(self.source)
+            else:
+                cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
             if not cap.isOpened():
-                self.attempts += 1
-                if self.attempts >= self.num_attempts:
-                    print(
-                        f"Failed to connect after {self.attempts} attempts. Stopping."
-                    )
-                    self.running = False
+                reconnect_attempts += 1
+                if self.max_reconnect_attempts and reconnect_attempts >= self.max_reconnect_attempts:
                     break
-                self.disconnected.emit()
-                time.sleep(3)
+                time.sleep(self.reconnect_delay)
                 continue
-            self.connect.emit()
-            prev_time = time.time()
+
+            reconnect_attempts = 0
+            frame_interval = self._frame_interval(cap, self.source)
+            if frame_interval is not None:
+                self.source_fps_ready.emit(1.0 / frame_interval)
+            else:
+                self.source_fps_ready.emit(0.0)
+
+            self._fps_history.clear()
+            last_frame_time = time.perf_counter()
+
             while self.running and cap.isOpened():
-                # print(f"Queue size: {self.queue.qsize()}")
-                ret, frame = cap.read()
-                # frame = cv2.flip(frame, 1)
-                self.queue.put(frame)
-                if self.queue.qsize() > self.queue.maxsize:
-                    self.queue.get()
-                if not ret:
-                    print("Stream ended or error occurred")
-                    self.disconnected.emit()
+                ok, frame = cap.read()
+                if not ok or frame is None:
                     break
-                cnt_frame += 1
-                current_time = time.time()
-                delta_time = current_time - prev_time
-                if delta_time > 0:
-                    fps = 1 / delta_time
-                    self.queue_fps_history.append(fps)
-                else:
-                    fps = 0.0
-                if len(self.queue_fps_history) > 30:
-                    self.queue_fps_history.pop(0)
-                prev_time = current_time
-                smooth_fps = sum(self.queue_fps_history) / len(self.queue_fps_history)
-                self.smooth_fps_update.emit(smooth_fps)
-                frame = cv2.resize(frame, (320, 320))
-                self.frame_ready.emit(frame)
+
+                if self.frame_size:
+                    frame = cv2.resize(frame, self.frame_size)
+
+                now = time.perf_counter()
+                elapsed = now - last_frame_time
+                if frame_interval is not None and elapsed < frame_interval:
+                    time.sleep(frame_interval - elapsed)
+                    now = time.perf_counter()
+                delta = now - last_frame_time
+                last_frame_time = now
+                fps = self._smooth_fps(1.0 / delta if delta > 0 else 0.0)
+
+                frame_id += 1
+                packet = FramePacket(
+                    camera_id=self.camera_id,
+                    frame_id=frame_id,
+                    frame=frame,
+                    timestamp=time.time(),
+                    capture_fps=fps,
+                )
+                put_latest(self.output_queue, packet)
+                self.fps_updated.emit(fps)
+
             cap.release()
-            time.sleep(3)
-        self.finished.emit()
 
-    def stop(self):
+            if self.running:
+                time.sleep(self.reconnect_delay)
+
+
+    def _smooth_fps(self, fps: float) -> float:
+        self._fps_history.append(fps)
+        if len(self._fps_history) > 30:
+            self._fps_history.pop(0)
+        return sum(self._fps_history) / len(self._fps_history)
+
+    def stop(self) -> None:
         self.running = False
+        self.wait(1500)
 
 
-class TestCameraUI(QWidget):
-    def __init__(self, queue):
-        super().__init__()
-        self.label_fps = QLabel("FPS: 0")
-        self.label = QLabel("Frame")
-        layout = QVBoxLayout()
-        layout.addWidget(self.label_fps)
-        layout.addWidget(self.label)
-        self.setLayout(layout)
 
-        self.worker_camera = CameraWorker(
-            source="rtsp://localhost:8554/live", queue=queue, max_queue_size=4
-        )
-
-        self.thread_camera = QThread()
-        self.worker_camera.moveToThread(self.thread_camera)
-        self.thread_camera.started.connect(self.worker_camera.run)
-        self.worker_camera.frame_ready.connect(self.display_frame)
-        self.worker_camera.smooth_fps_update.connect(self.update_fps)
-        self.thread_camera.start()
-
-    def update_fps(self, fps):
-        self.label_fps.setText(f"FPS: {fps:.2f}")
-        print(f"FPS: {fps:.2f}")
-
-    def display_frame(self, frame):
-        rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        h, w, ch = rgb_image.shape
-        bytes_per_line = ch * w
-        qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        pixmap = QPixmap.fromImage(qt_image)
-        self.label.setPixmap(pixmap)
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    queue = Queue()
-    test_ui = TestCameraUI(queue)
-    test_ui.show()
-    sys.exit(app.exec_())
+CameraWorker = CaptureThread
